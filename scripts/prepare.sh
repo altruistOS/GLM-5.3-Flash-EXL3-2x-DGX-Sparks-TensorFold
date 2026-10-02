@@ -43,7 +43,7 @@ worker 'command -v rsync >/dev/null' || die "rsync is not installed on the worke
 detect_link
 log "Link: head $HEAD_ADDR ($HEAD_DEV, $HEAD_HCA, GID $HEAD_GID) <-> worker $WORKER_ADDR ($WORKER_DEV, $WORKER_HCA, GID $WORKER_GID)"
 WORKER_HF=$(worker_hf_cache)
-worker "mkdir -p '$WORKER_HF/hub' && test -w '$WORKER_HF/hub'" ||
+[[ "$WORKER_WEIGHTS" == nfs ]] || worker "mkdir -p '$WORKER_HF/hub' && test -w '$WORKER_HF/hub'" ||
   die "the worker's $WORKER_HF/hub is not writable (left root-owned by a container? fix its ownership there)"
 
 PATCHES_HASH=$(image_hash)
@@ -108,20 +108,20 @@ fi
 docker run --rm --entrypoint tensorfold "$IMAGE" --version 2>/dev/null | tail -1
 
 # ---------------------------------------------------------------- 3. image (worker)
-image_id=$(docker image inspect -f '{{.Id}}' "$IMAGE")
-if [[ "$(worker docker image inspect -f '{{.Id}}' "$IMAGE" 2>/dev/null)" != "$image_id" ]]; then
+image_id=$(image_ident "$IMAGE")                    # by content: .Id differs between image stores (issue #8)
+if [[ "$(worker_image_ident "$IMAGE")" != "$image_id" ]]; then
   wfree=$(worker_free_gb "$WORKER_DOCKER_ROOT")
   (( wfree >= IMAGE_FREE_GB )) ||
     die "only ${wfree} GB free under the worker's Docker root ($WORKER_DOCKER_ROOT); the image needs ~${IMAGE_FREE_GB} GB (IMAGE_FREE_GB)"
   if [[ "${PULL:-1}" == 1 ]] && worker docker pull "$prebuilt" >/dev/null 2>&1 &&
-     [[ "$(worker docker image inspect -f '{{.Id}}' "$prebuilt")" == "$image_id" ]]; then
+     [[ "$(worker_image_ident "$prebuilt")" == "$image_id" ]]; then
     worker docker tag "$prebuilt" "$IMAGE"
     log "Using $prebuilt as $IMAGE on the worker"
   else
     log "Copying $IMAGE to the worker (docker save | docker load; only missing layers are stored)"
     docker save "$IMAGE" | worker docker load >/dev/null
   fi
-  [[ "$(worker docker image inspect -f '{{.Id}}' "$IMAGE")" == "$image_id" ]] || die "the worker's $IMAGE differs from the head's"
+  [[ "$(worker_image_ident "$IMAGE")" == "$image_id" ]] || die "the worker's $IMAGE differs from the head's"
 fi
 log "Image $IMAGE identical on both Sparks"
 
@@ -158,11 +158,26 @@ done
 # ---------------------------------------------------------------- 5. verify (head)
 # before the copy: the worker gets only a checkpoint TensorFold reads
 log "Verifying checkpoint with tensorfold info"
-docker run --rm --entrypoint tensorfold -e HF_HUB_OFFLINE=1 -v "$HF_CACHE":/root/.cache/huggingface "$IMAGE" \
-  info "/root/.cache/huggingface/hub/models--${MODEL_ID//\//--}/snapshots/$(snapshot_rev "$MODEL_ID")"
+# (without its "EXL3 support is experimental" note: this recipe serves the EXL3 checkpoint on purpose)
+info=$(docker run --rm --entrypoint tensorfold -e HF_HUB_OFFLINE=1 -v "$HF_CACHE":/root/.cache/huggingface "$IMAGE" \
+  info "/root/.cache/huggingface/hub/models--${MODEL_ID//\//--}/snapshots/$(snapshot_rev "$MODEL_ID")" 2>&1) ||
+  die "tensorfold info cannot read the checkpoint: $info"
+printf '%s\n' "$info" | grep -v "EXL3 support is experimental" || true
 
 # ---------------------------------------------------------------- 6. the same files on the worker
+if [[ "$WORKER_WEIGHTS" == nfs ]]; then         # no copy: rank 1 reads the head's cache over NFS
+  ensure_nfs_volume
+  for id in "${models[@]}"; do
+    dir=$(model_cache_dir "$id"); rev=$(snapshot_rev "$id")
+    manifest=$(cd "$dir/snapshots/$rev" && find -L . -type f -printf '%P %s\n' | sort)
+    have=$(worker_nfs find -L "/hf/hub/${dir##*/}/snapshots/$rev" -type f -printf '%P %s\n' 2>/dev/null | sort || true)
+    [[ "$have" == "$manifest" ]] ||
+      die "the worker does not see $id @ ${rev:0:8} over NFS ($NFS_VOLUME: :$NFS_PATH from ${NFS_SERVER:-$HEAD_ADDR}); is HF_CACHE exported to it? (README: Worker weights over NFS)"
+    log "Worker reads $id @ ${rev:0:8} from the head over NFS ($NFS_VOLUME)"
+  done
+fi
 for id in "${models[@]}"; do
+  [[ "$WORKER_WEIGHTS" == nfs ]] && break
   dir=$(model_cache_dir "$id"); rev=$(snapshot_rev "$id")
   # every file of the snapshot, with its size (links followed), as the head has it
   manifest=$(cd "$dir/snapshots/$rev" && find -L . -type f -printf '%P %s\n' | sort)
@@ -179,7 +194,8 @@ for id in "${models[@]}"; do
   worker "mkdir -p '$wdir/refs' '$wdir/snapshots'"
   # the blobs this revision uses, then its snapshot links and refs/main (the cache layout huggingface_hub keeps)
   (cd "$dir" && find "snapshots/$rev" -type l -printf '%l\n' | sed 's#^\(\.\./\)*##' | sort -u) > "$STATE_DIR/blobs"
-  rsync -a --partial --files-from="$STATE_DIR/blobs" "$dir/" "$WORKER:$wdir/" \
+  # -L: a blob may itself be a link into the cache root's blobs/ (huggingface_hub's xet backend, issue #15)
+  rsync -a -L --partial --files-from="$STATE_DIR/blobs" "$dir/" "$WORKER:$wdir/" \
     -e "ssh -o BatchMode=yes" ${RSYNC_OPTS:-}
   rsync -a "$dir/snapshots/$rev" "$WORKER:$wdir/snapshots/" -e "ssh -o BatchMode=yes"
   # refs/main as the head has it (with a pin: only when the worker has none)
@@ -191,4 +207,4 @@ done
 
 prepared_state > "$PREPARED_MARKER"
 log "Done: both Sparks are ready. Start the server with ./start.sh (port $PORT)."
-log "The first start compiles CUDA kernels for GB10 (a few minutes); they are cached in $KERNEL_CACHE here and in ~/.cache/tensorfold-glm53 on the worker."
+log "The first start compiles CUDA kernels for GB10 (a few minutes); they are cached in $KERNEL_CACHE/<image hash> here and under ~/.cache/tensorfold-glm53 on the worker (a folder per image)."
