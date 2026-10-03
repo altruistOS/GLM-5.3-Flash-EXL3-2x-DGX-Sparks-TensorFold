@@ -7,8 +7,8 @@
 # FABRIC_PEER is needed. Key-based ssh from the head verified (ssh -o BatchMode=yes ... true).
 WORKER=kenleo_dgx@192.168.177.12
 
-# The checkpoint snapshot already in both Sparks' HF caches (refs/main, 164 GiB complete, 121
-# safetensors shards). The repository's default pin (9eaebb7c...) is not what is on disk; keeping
-# it would make prepare.sh re-download ~164 GB. DFlash2's cache matches its pin, so it needs no
-# override.
-MODEL_REVISION=024db9f7e9871e8efdf21538ba55af7442be3cd5
+# v1.4 serves the new Mia-AiLab/GLM-5.3-Flash-EXL3-4bpw-TensorFold checkpoint by default; its
+# pin (078455ff...) is inherited from scripts/config.sh, so nothing is overridden here. The old
+# GLM-5.3-Flash-EXL3-TR3-4bpw snapshot (024db9f7...) stays in both Sparks' HF caches but is no
+# longer referenced; remove it there to reclaim ~164 GiB on each Spark once the new checkpoint
+# has been rsynced to the worker.
