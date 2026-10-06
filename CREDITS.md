@@ -106,6 +106,18 @@ checkpoint's ShapleyMcg attribution and the drafter's license).
 - `0074-glm-compact-before-evict` (the shared pool compacts before it evicts, issue #61): by
   [ezoushen](https://github.com/ezoushen), [pull request #62](https://github.com/MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks-TensorFold/pull/62)
   (contributed as 0073), applied as contributed, with `tools/pool_pressure.py` and `tools/pool_room_check.py`.
+- `0077-glm-kept-cap-shared-by-recency` (a new agent run keeps its system prompt's state once the kept-state cap is
+  full): the diagnosis, and the fix of evicting shared-prefix states by recency only, by
+  [meleesciony](https://github.com/meleesciony) in [issue #75](https://github.com/MiaAI-Lab/GLM-5.3-Flash-EXL3-2x-DGX-Sparks-TensorFold/issues/75); the code is our own.
+- `0078-glm-take-over-decide-then-copy` (a fresh conversation after a long one clones only the kept states that stay):
+  by [m-naoki-m](https://github.com/m-naoki-m), also proposed upstream as
+  [TensorFold PR #421](https://github.com/ashhart/TensorFold/pull/421).
+- `0079-glm-picture-cache` and `0080-vision-quoted-markers`: by [ThomasWadeZ](https://github.com/ThomasWadeZ)
+  (#63, #64).
+- `0081-tfcap-capacity-status`, `0082-tfcap-admission-cap` and `0083-tfcap-delivery-abort`: by
+  [johnwhited](https://github.com/johnwhited) (#48); the admission check and the abort-on-delivery-failure semantics
+  follow [vLLM](https://github.com/vllm-project/vllm) v1's `check_admission` and generate-abort behaviour
+  (Apache 2.0) as a reference.
 - Every patch, except the parts credited above: by MiaAI-Lab, developed with
   [Claude Code](https://claude.com/claude-code), under the Apache License 2.0; the TensorFold code the patches modify or
   quote as context stays under TensorFold's licenses (Apache 2.0, and MIT for code written before v0.6.0; see
